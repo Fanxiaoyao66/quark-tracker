@@ -249,4 +249,6 @@ Point your agent at [`integrations/openclaw/SKILL.md`](integrations/openclaw/SKI
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+**AGPL-3.0** — see [LICENSE](LICENSE).
+
+quark-tracker links [quark-auto-save](https://github.com/Cp0204/quark-auto-save) at runtime (`qsync_api.py` imports its `quark_auto_save` module), so it inherits the same AGPL-3.0 copyleft. Note AGPL §13: if you run a modified version as a network-accessible service, you must offer its users the corresponding source.

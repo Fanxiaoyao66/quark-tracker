@@ -247,4 +247,6 @@ quark-auto-save 按自己的节奏转存（默认 08/18/20 点）。让 quark-tr
 
 ## 许可证
 
-MIT —— 见 [LICENSE](LICENSE)。
+**AGPL-3.0** —— 见 [LICENSE](LICENSE)。
+
+quark-tracker 在运行时链接了 [quark-auto-save](https://github.com/Cp0204/quark-auto-save)（`qsync_api.py` 导入其 `quark_auto_save` 模块），因此继承相同的 AGPL-3.0 强 copyleft。注意 AGPL 第 13 条：若你把修改版作为可联网访问的服务运行，须向其用户提供对应源码。

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """quark-tracker control entrypoint — meant to be driven by an LLM agent or by hand.
 
 Subcommands:

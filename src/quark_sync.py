@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """quark-tracker: download new episodes that quark-auto-save transferred into your
 Quark account, dedup against your local library, TMDB-rename, and notify.
 

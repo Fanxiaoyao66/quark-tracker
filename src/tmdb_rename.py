@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Standalone TMDB episode renamer -> Infuse/Plex/Jellyfin friendly names.
 
 Renames files under `<show-root>/Season NN/` to `Title - SxxExx - Episode Name.ext`,
