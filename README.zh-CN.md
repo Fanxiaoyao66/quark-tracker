@@ -10,6 +10,8 @@
 
 
 
+> **关键词**：夸克网盘 · 夸克自动下载 · 夸克网盘下载到 NAS · 自动追番 · 追剧 · 飞牛 fnOS · 群晖 · Infuse 刮削 · TMDB · aria2 加速 · 多线程下载 · quark-auto-save 搭档 · 媒体库自动化
+
 它是 [**quark-auto-save**](https://github.com/Cp0204/quark-auto-save) 的搭档：quark-auto-save 负责监控分享链接、把新剧集**转存**进你自己的夸克账号；quark-tracker 补上缺的另一半——**真正把这些剧集下载到本地硬盘**、用 TMDB 元数据**改名**、和你已有的集数**去重**，并且可以**让 AI agent 驱动**：从一条分享链接判断这部剧完结没、连载就自动加监控并设截止日期。
 
 ```
@@ -49,6 +51,27 @@ quark-auto-save 擅长云端转存 + 在夸克内改名。但如果你想要 NAS
 - 运行中的 **[quark-auto-save](https://github.com/Cp0204/quark-auto-save)**（仓库自带 `compose.yaml`），并已登录你的夸克账号。
 - 一个免费的 **[TMDB](https://www.themoviedb.org/settings/api) API key**（用于集名改名）。
 - 宿主机有 `python3`、`docker`、以及 **`aria2c`**（强烈建议）。
+
+---
+
+## 🤖 让 AI 一键部署
+
+让一个能 SSH 进你 NAS 的 AI agent（Claude Code / OpenClaw / Cursor 等）全自动装好。把下面这段提示词发给它：
+
+```text
+在我的 Linux NAS 上端到端部署 "quark-tracker"（https://github.com/Fanxiaoyao66/quark-tracker）：
+1. 装 aria2c（apt/opkg 等）；
+2. git clone 仓库到 /opt/quark-tracker；
+3. 用自带 compose.yaml 起 quark-auto-save，然后提醒我去 WebUI（:5005）登录夸克；
+4. 把 src/qsync_api.py 复制进 quark-auto-save 的 config 卷（让它落在 /app/config/qsync_api.py）；
+5. 用 config.example.json 生成 /opt/quark-tracker/config.json；
+6. 按 README 加每小时的 root cron（带 flock）；
+7. 跑 quark_sync.py --dry-run 验证，并把输出给我看。
+先问我：媒体库路径、TMDB API key、以及通知方式（一个 webhook 地址，或一条 shell 命令）。
+然后执行，并准确汇报你改了什么。
+```
+
+给 agent root 前，先看它打算做什么——参见第 7 步的 agent 模式说明。
 
 ---
 

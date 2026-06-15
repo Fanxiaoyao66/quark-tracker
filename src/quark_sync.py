@@ -157,6 +157,35 @@ def rename_show(libdir, name, ov):
         log("RENAME_ERR", (rr.stderr or "")[-300:])
 
 
+def fmt_eps(pairs):
+    pairs = sorted(set(pairs)); out = []; i = 0
+    while i < len(pairs):
+        s, e = pairs[i]; j = i
+        while j + 1 < len(pairs) and pairs[j + 1] == (s, pairs[j][1] + 1):
+            j += 1
+        out.append("S%02dE%02d-E%02d" % (s, e, pairs[j][1]) if j > i else "S%02dE%02d" % (s, e))
+        i = j + 1
+    return ", ".join(out)
+
+
+def fmt_size(b):
+    return "%.1f GB" % (b / 1073741824) if b >= 1073741824 else "%.0f MB" % (b / 1048576)
+
+
+def build_msg(cat, name, libdir, rec):
+    eps = rec["eps"]; b = rec.get("bytes", 0)
+    secs = max(rec.get("t1", 0) - rec.get("t0", 0), 0.1)
+    spd = b / secs / 1048576
+    return ("🎬 quark-tracker | new in library\n"
+            "━━━━━━━━━━━━━\n"
+            "📺 %s · %s\n"
+            "🆕 +%d eps · %s\n"
+            "💾 %s · ⚡ %.0f MB/s (aria2c)\n"
+            "📂 %s\n"
+            "🕒 %s") % (name, cat, len(eps), fmt_eps(eps), fmt_size(b), spd, libdir,
+                        time.strftime("%Y-%m-%d %H:%M"))
+
+
 def main():
     log("=== quark-tracker sync%s ===" % (" (DRY)" if DRY else ""))
     ov_all = overrides()
@@ -207,18 +236,18 @@ def main():
                     if download(url, cookie, dest):
                         if OWNER:
                             subprocess.run(["chown", OWNER, dest], capture_output=True)
-                        new_by_show.setdefault((cat, name, libdir), []).append("S%02dE%02d" % (snum, ep))
+                        rec = new_by_show.setdefault((cat, name, libdir), {"eps": [], "bytes": 0, "t0": time.time()})
+                        rec["eps"].append((snum, ep)); rec["bytes"] += f.get("size", 0); rec["t1"] = time.time()
                     else:
                         log("DOWNLOAD_FAIL", name, ep)
     if DRY:
         log("=== dry-run end ==="); return
-    for (cat, name, libdir), eps in new_by_show.items():
+    for (cat, name, libdir), rec in new_by_show.items():
         rename_show(libdir, name, ov_all.get(name, {}))
         if OWNER:
             subprocess.run(["chown", "-R", OWNER, libdir], capture_output=True)
-        msg = "📺 %s\n《%s》\nNew: %s" % (cat, name, " ".join(sorted(eps)))
-        notify.send(CFG.get("notify", []), msg, log=log)
-        log("NOTIFIED", name, eps)
+        notify.send(CFG.get("notify", []), build_msg(cat, name, libdir, rec), log=log)
+        log("NOTIFIED", name, fmt_eps(rec["eps"]))
     if not new_by_show:
         log("no new episodes")
     log("=== sync done ===")

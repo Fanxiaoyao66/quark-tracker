@@ -10,6 +10,10 @@
 
 
 
+> 🇨🇳 **夸克网盘自动追番 / 追剧下载到 NAS**：分享链接 → 自动转存 → **aria2c 全速下载**到飞牛 fnOS / 群晖等 NAS → **TMDB 改名** → Infuse / Emby / Jellyfin，支持连载自动监控、完结判断、微信 / QQ 通知。详见 **[中文文档](README.zh-CN.md)**。
+>
+> **关键词**：夸克网盘 · 夸克自动下载 · 自动追番 · 追剧 · NAS · 飞牛 fnOS · Infuse 刮削 · TMDB · aria2 加速 · quark-auto-save 搭档
+
 It is a companion to [**quark-auto-save**](https://github.com/Cp0204/quark-auto-save) (which watches share links and *transfers* new episodes into your own Quark account). quark-tracker adds the missing half: it **actually downloads** those episodes to local disk, **renames** them with TMDB metadata, **dedupes** against what you already have, and can be **driven by an LLM agent** to decide — from a single share link — whether a show is finished or still airing, and to set up monitoring with an automatic end date.
 
 ```
@@ -49,6 +53,27 @@ quark-auto-save is great at cloud-to-cloud transfer + renaming inside Quark. But
 - **[quark-auto-save](https://github.com/Cp0204/quark-auto-save)** running (a `compose.yaml` is included), logged into your Quark account.
 - A free **[TMDB](https://www.themoviedb.org/settings/api) API key** for episode-title renaming.
 - `python3`, `docker`, and **`aria2c`** (strongly recommended) on the host.
+
+---
+
+## 🤖 One-command AI deploy
+
+Have an AI agent with shell/SSH access to your NAS (Claude Code, OpenClaw, Cursor, …) set it all up. Paste this prompt:
+
+```text
+Deploy "quark-tracker" (https://github.com/Fanxiaoyao66/quark-tracker) on my Linux NAS, end-to-end:
+1. Install aria2c (apt/opkg/etc).
+2. git clone the repo to /opt/quark-tracker.
+3. docker compose up -d the bundled quark-auto-save, then tell me to log into Quark in its WebUI (:5005).
+4. Copy src/qsync_api.py into the quark-auto-save config volume (so it lands at /app/config/qsync_api.py).
+5. Create /opt/quark-tracker/config.json from config.example.json.
+6. Add the hourly root cron job (with flock) from the README.
+7. Run quark_sync.py --dry-run to verify, and show me the output.
+First ask me for: my media-library paths, my TMDB API key, and how I want notifications
+(a webhook URL, or a shell command). Then do it and report exactly what you changed.
+```
+
+Review what the agent proposes before granting it root — see the agent-mode notes in Step 7.
 
 ---
 
