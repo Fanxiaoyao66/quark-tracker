@@ -6,6 +6,9 @@
 
 <img width="1791" height="1566" alt="image" src="https://github.com/user-attachments/assets/2116ff66-a3cb-4843-8cb8-16606014ada8" />
 
+<img width="1866" height="1326" alt="57e67868-9af1-4eb3-858c-776b28805f74" src="https://github.com/user-attachments/assets/4cf60f84-c742-4059-8086-59b815e89ab1" />
+
+
 
 It is a companion to [**quark-auto-save**](https://github.com/Cp0204/quark-auto-save) (which watches share links and *transfers* new episodes into your own Quark account). quark-tracker adds the missing half: it **actually downloads** those episodes to local disk, **renames** them with TMDB metadata, **dedupes** against what you already have, and can be **driven by an LLM agent** to decide — from a single share link — whether a show is finished or still airing, and to set up monitoring with an automatic end date.
 
