@@ -4,6 +4,9 @@
 
 **Auto-download newly-aired episodes from Quark (夸克网盘) share links to your NAS, in Infuse/Plex/Jellyfin-friendly naming — with TMDB episode titles, smart dedup, multi-threaded downloads, optional notifications, and an agent-driven "just send a link" mode.**
 
+<img width="1791" height="1566" alt="image" src="https://github.com/user-attachments/assets/2116ff66-a3cb-4843-8cb8-16606014ada8" />
+
+
 It is a companion to [**quark-auto-save**](https://github.com/Cp0204/quark-auto-save) (which watches share links and *transfers* new episodes into your own Quark account). quark-tracker adds the missing half: it **actually downloads** those episodes to local disk, **renames** them with TMDB metadata, **dedupes** against what you already have, and can be **driven by an LLM agent** to decide — from a single share link — whether a show is finished or still airing, and to set up monitoring with an automatic end date.
 
 ```
