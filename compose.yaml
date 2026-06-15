@@ -1,0 +1,19 @@
+# quark-auto-save — the upstream tool that watches Quark share links and transfers
+# new episodes into your own Quark account. quark-tracker drives it + downloads.
+#
+# After `docker compose up -d`:
+#   1. Open the WebUI (http://<host>:5005, default admin / admin123 — CHANGE IT) and
+#      log into your Quark account (cookie or QR).
+#   2. Copy quark-tracker's src/qsync_api.py into ./quark-config/ so it is reachable
+#      inside the container at /app/config/qsync_api.py.
+services:
+  quark-auto-save:
+    image: cp0204/quark-auto-save:latest
+    container_name: quark-auto-save
+    restart: unless-stopped
+    ports:
+      - "5005:5005"
+    volumes:
+      - ./quark-config:/app/config
+    environment:
+      - TZ=Asia/Shanghai

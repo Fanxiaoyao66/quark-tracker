@@ -1,0 +1,19 @@
+# Local config & secrets — NEVER commit
+config.json
+overrides.json
+*.env
+tmdb.env
+quark_config.json
+.cookie
+
+# Runtime
+*.log
+*.part
+__pycache__/
+*.pyc
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

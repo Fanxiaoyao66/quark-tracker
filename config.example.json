@@ -1,0 +1,51 @@
+{
+  "container": "quark-auto-save",
+
+  "_categories": "Map any label -> where quark-auto-save saves inside your Quark account (quark_root) and where to download locally (library). Add as many as you like.",
+  "categories": {
+    "动漫": { "quark_root": "/追剧/动漫", "library": "/vol1/media/anime" },
+    "剧集": { "quark_root": "/追剧/剧集", "library": "/vol1/media/tv" }
+  },
+
+  "_owner": "Optional 'user:group' to chown downloaded files (needs root). Empty = leave as-is.",
+  "owner": "",
+
+  "video_exts": ["mkv", "mp4", "avi", "mov", "m4v", "ts"],
+
+  "_download": "Quark throttles single connections hard (~100 KB/s for free accounts). aria2c with N connections bypasses it (≈67 MB/s in testing). Install aria2c; falls back to curl if missing.",
+  "download": { "connections": 16 },
+
+
+  "tmdb": {
+    "_doc": "Provide api_key OR bearer_token, OR point env_file at a file containing TMDB_API_KEY=... / TMDB_BEARER_TOKEN=...",
+    "api_key": "",
+    "bearer_token": "",
+    "env_file": "",
+    "language": "zh-CN",
+    "enddate_buffer_days": 14
+  },
+
+  "rename": {
+    "_doc": "Bundled standalone TMDB renamer -> 'Title - SxxExx - Episode Name.ext'. Set enabled=false to keep raw SxxExx names.",
+    "enabled": true,
+    "script": "tmdb_rename.py"
+  },
+
+  "_notify": "List of notification sinks. Each new-episode batch sends {msg}. Remove all for no notifications.",
+  "notify": [
+    {
+      "type": "command",
+      "_doc": "Runs a local command; {msg} is replaced by the message text. Example: your own push script.",
+      "cmd": ["/path/to/your-notify.sh", "--message", "{msg}"]
+    },
+    {
+      "type": "webhook",
+      "_doc": "POST to a URL. json_field set -> sends JSON {<field>: msg}; omit json_field -> sends raw text body.",
+      "url": "https://example.com/push",
+      "method": "POST",
+      "json_field": "text"
+    }
+  ],
+
+  "overrides_file": "overrides.json"
+}
