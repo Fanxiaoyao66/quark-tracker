@@ -4,6 +4,9 @@
 
 **把夸克网盘分享链接里新更新的剧集，自动下载到你的 NAS，并按 Infuse/Plex/Jellyfin 规范命名**——带 TMDB 集名、智能去重、多线程下载、可选通知，还有"发个链接就自动搞定"的 AI agent 模式。
 
+<img width="1791" height="1566" alt="image" src="https://github.com/user-attachments/assets/045945ac-424b-46fc-801f-0e8821029a19" />
+
+
 它是 [**quark-auto-save**](https://github.com/Cp0204/quark-auto-save) 的搭档：quark-auto-save 负责监控分享链接、把新剧集**转存**进你自己的夸克账号；quark-tracker 补上缺的另一半——**真正把这些剧集下载到本地硬盘**、用 TMDB 元数据**改名**、和你已有的集数**去重**，并且可以**让 AI agent 驱动**：从一条分享链接判断这部剧完结没、连载就自动加监控并设截止日期。
 
 ```
