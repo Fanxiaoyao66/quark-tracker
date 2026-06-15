@@ -6,6 +6,9 @@
 
 <img width="1791" height="1566" alt="image" src="https://github.com/user-attachments/assets/045945ac-424b-46fc-801f-0e8821029a19" />
 
+<img width="1866" height="1326" alt="57e67868-9af1-4eb3-858c-776b28805f74" src="https://github.com/user-attachments/assets/280bbec7-23f0-4a4a-a133-259fca21f484" />
+
+
 
 它是 [**quark-auto-save**](https://github.com/Cp0204/quark-auto-save) 的搭档：quark-auto-save 负责监控分享链接、把新剧集**转存**进你自己的夸克账号；quark-tracker 补上缺的另一半——**真正把这些剧集下载到本地硬盘**、用 TMDB 元数据**改名**、和你已有的集数**去重**，并且可以**让 AI agent 驱动**：从一条分享链接判断这部剧完结没、连载就自动加监控并设截止日期。
 
