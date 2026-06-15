@@ -1,6 +1,12 @@
-# quark-tracker
+<p align="center">
+  <img src="assets/logo.svg" alt="quark-tracker" width="480">
+</p>
 
-**语言：** [English](README.md) | **中文**
+<p align="center">
+  <a href="README.md">English</a> · <strong>中文</strong>
+</p>
+
+# quark-tracker
 
 **把夸克网盘分享链接里新更新的剧集，自动下载到你的 NAS，并按 Infuse/Plex/Jellyfin 规范命名**——带 TMDB 集名、智能去重、多线程下载、可选通知，还有"发个链接就自动搞定"的 AI agent 模式。
 

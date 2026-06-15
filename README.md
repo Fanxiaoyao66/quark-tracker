@@ -1,6 +1,12 @@
-# quark-tracker
+<p align="center">
+  <img src="assets/logo.svg" alt="quark-tracker" width="480">
+</p>
 
-**Languages:** **English** | [中文](README.zh-CN.md)
+<p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">中文</a>
+</p>
+
+# quark-tracker
 
 **Auto-download newly-aired episodes from Quark (夸克网盘) share links to your NAS, in Infuse/Plex/Jellyfin-friendly naming — with TMDB episode titles, smart dedup, multi-threaded downloads, optional notifications, and an agent-driven "just send a link" mode.**
 
