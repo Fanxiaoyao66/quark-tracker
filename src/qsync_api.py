@@ -7,7 +7,8 @@ reachable at /app/config/qsync_api.py, then call via `docker exec`.
 
 Actions:
   tree <root>...        list saved roots  -> {root: {exists, shows:[{name, seasons:[{name, files}]}]}}
-  urls <fid>...         -> {"cookie": <account cookie>, "urls": {fid: download_url}}
+  urls <fid>...         -> {"cookie": <account cookie>, "urls": {fid: download_url},
+                            "dlcookies": {fid: temp __puus cookie the Quark CDN requires}}
   probe <share_url>     walk a SHARE link -> {pwd_id, title_guess, folders:[...]}
   addtask <json>        upsert a task into quark_config.json (match by taskname)
   deltask <taskname>    remove a task
@@ -114,10 +115,14 @@ def main():
             out[root] = {"exists": True, "shows": shows}
         emit(out)
     elif action == "urls":
-        acc, cookie = get_acc(); res = {}
+        acc, cookie = get_acc(); res = {}; dlck = {}
         for fid in sys.argv[2:]:
-            res[fid] = retry(lambda f=fid: acc.download([f])[0]["data"][0]["download_url"])
-        emit({"cookie": cookie, "urls": res})
+            def _u(f=fid):
+                r, tck = acc.download([f])
+                return r["data"][0]["download_url"], tck
+            url, tck = retry(_u)
+            res[fid] = url; dlck[fid] = tck
+        emit({"cookie": cookie, "urls": res, "dlcookies": dlck})
     elif action == "probe":
         acc, _ = get_acc(); url = sys.argv[2]
         pwd_id, passcode, pdir_fid, _ = acc.extract_url(url)

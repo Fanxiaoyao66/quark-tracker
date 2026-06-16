@@ -98,9 +98,14 @@ def local_has(local_season, season, ep):
     return any(f.is_file() and not f.name.endswith(".part") and tag in f.name.lower() for f in p.iterdir())
 
 
-def download(url, cookie, dest):
+def download(url, cookie, dest, dlcookie=""):
     """Multi-connection download via aria2c (bypasses Quark's per-connection throttle);
-    falls back to single-stream curl if aria2c is not installed."""
+    falls back to single-stream curl if aria2c is not installed.
+
+    Quark validates the temporary `__puus` cookie issued by the /file/download API; the
+    signed URL returns HTTP 403 without it. Pass it via `dlcookie` (see qsync_api `urls`)."""
+    if dlcookie:
+        cookie = cookie + "; " + dlcookie
     d = os.path.dirname(dest)
     part = os.path.basename(dest) + ".part"
     partpath = os.path.join(d, part)
@@ -111,6 +116,16 @@ def download(url, cookie, dest):
                "--max-tries=5", "--retry-wait=3", "-c", "--console-log-level=warn",
                "--summary-interval=0", "-d", d, "-o", part] + hdrs + [url]
         ok = subprocess.run(cmd).returncode == 0
+        if not ok:  # some Quark links reject multi-threaded Range requests; retry single-stream
+            for _x in (partpath, partpath + ".aria2"):
+                try:
+                    os.remove(_x)
+                except OSError:
+                    pass
+            cmd1 = ["aria2c", "-x1", "-s1", "-k1M", "--file-allocation=none",
+                    "--max-tries=5", "--retry-wait=3", "-c", "--console-log-level=warn",
+                    "--summary-interval=0", "-d", d, "-o", part] + hdrs + [url]
+            ok = subprocess.run(cmd1).returncode == 0
     else:
         hf = "/tmp/.qt_hdr_%d" % os.getpid()
         with open(hf, "w") as fh:
@@ -175,7 +190,7 @@ def fmt_size(b):
 
 def build_msg(cat, name, libdir, rec):
     eps = rec["eps"]; b = rec.get("bytes", 0)
-    secs = max(rec.get("t1", 0) - rec.get("t0", 0), 0.1)
+    secs = max(rec.get("secs", 0), 0.1)
     spd = b / secs / 1048576
     return ("🎬 quark-tracker | new in library\n"
             "━━━━━━━━━━━━━\n"
@@ -229,16 +244,18 @@ def main():
                     try:
                         resp = api("urls", f["fid"])
                         cookie, url = resp["cookie"], resp["urls"][f["fid"]]
+                        dlcookie = resp.get("dlcookies", {}).get(f["fid"], "")
                     except Exception as e:
                         log("URL_ERR", name, ep, e); continue
                     ext = os.path.splitext(f["name"])[1].lower()
                     dest = os.path.join(local_season, "%s - S%02dE%02d%s" % (name, snum, ep, ext))
                     log("DOWNLOAD", name, "S%02dE%02d" % (snum, ep), "%.0fMB" % (f["size"] / 1048576))
-                    if download(url, cookie, dest):
+                    t0 = time.time()
+                    if download(url, cookie, dest, dlcookie):
                         if OWNER:
                             subprocess.run(["chown", OWNER, dest], capture_output=True)
-                        rec = new_by_show.setdefault((cat, name, libdir), {"eps": [], "bytes": 0, "t0": time.time()})
-                        rec["eps"].append((snum, ep)); rec["bytes"] += f.get("size", 0); rec["t1"] = time.time()
+                        rec = new_by_show.setdefault((cat, name, libdir), {"eps": [], "bytes": 0, "secs": 0.0})
+                        rec["eps"].append((snum, ep)); rec["bytes"] += f.get("size", 0); rec["secs"] += time.time() - t0
                     else:
                         log("DOWNLOAD_FAIL", name, ep)
     if DRY:
