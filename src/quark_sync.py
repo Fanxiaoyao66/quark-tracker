@@ -271,4 +271,16 @@ def main():
     log("=== sync done ===")
 
 
-main()
+try:
+    main()
+except Exception:
+    import traceback
+    _tb = traceback.format_exc()
+    log("FATAL\n" + _tb)
+    try:
+        notify.send(CFG.get("notify", []),
+                    "❌ quark-tracker crashed: " + ((_tb.strip().splitlines() or [""])[-1])[:200],
+                    log=log)
+    except Exception:
+        pass
+    raise
