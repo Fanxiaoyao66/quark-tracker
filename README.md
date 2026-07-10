@@ -50,7 +50,10 @@ quark-auto-save is great at cloud-to-cloud transfer + renaming inside Quark. But
 - **TMDB renaming** — bundled standalone renamer → `Show - S02E10 - Episode Name.ext`. No external agent required.
 - **Multi-category** — map any labels (anime / TV / …) to a Quark staging root and a local library path.
 - **Pluggable notifications** — `webhook` (ServerChan / Bark / custom) or `command` (run any local push script), or none.
-- **Agent-driven mode** (optional) — one control CLI (`quark_ctl.py`: `probe / tmdb / addtask / sync / …`) plus an example skill so an LLM agent can take a raw share link and: detect contents, pick the best subtitle group, ask TMDB whether the show has finished, download accordingly, and for still-airing shows add a monitoring task with an **end date = finale + N days**.
+- **Agent-driven mode** (optional) — one background `autodl --link <url>` call runs the whole pipeline: detect seasons (multi-season packs handled season by season), pick the best release (coverage → quality → size → usable simplified-Chinese subs), ask TMDB whether the show has finished, transfer (verified + retried), download, rename, notify — so an LLM agent replies instantly instead of timing its turn out on a multi-GB download. Manual subcommands (`probe / tmdb / addtask / sync / …`) remain for diagnostics.
+- **Password-protected archives** — releases disguised as `.exe`/`.rar`/`.7z`/`.zip` are downloaded, the unpack password is parsed from the share (decoy folder names / password txt, with variant guessing), extracted with `7z`, and the episodes filed into the library.
+- **External subtitles** — `subs --link <url>` (also run automatically after `autodl`) sweeps a share for external subs (loose or zipped), prefers simplified Chinese, and names them `<video name>.zh.ass` next to the matching episodes.
+- **Theatrical movies** — optional: a 剧场版 folder inside a TV share is detected and downloaded into a separate movie library.
 - **Zero Python dependencies** — standard library + `aria2c`/`curl` + `docker` only.
 
 ## Requirements
@@ -174,7 +177,7 @@ Result on disk:
 quark-auto-save transfers on its own schedule (default 08/18/20). Run quark-tracker hourly to pick up and download whatever is new:
 ```cron
 # sudo crontab -e   (runs as root)
-17 * * * * QUARK_TRACKER_CONFIG=/opt/quark-tracker/config.json /usr/bin/flock -n /tmp/quark_sync.lock /usr/bin/python3 /opt/quark-tracker/src/quark_sync.py >> /opt/quark-tracker/cron.log 2>&1
+17 * * * * QUARK_TRACKER_CONFIG=/opt/quark-tracker/config.json /usr/bin/flock -n /tmp/quark-tracker.sync.lock /usr/bin/python3 /opt/quark-tracker/src/quark_sync.py >> /opt/quark-tracker/cron.log 2>&1
 ```
 
 ### Step 7 — (Optional) "just send a link" agent mode
@@ -184,7 +187,7 @@ Let an LLM agent (e.g. OpenClaw, or any tool-runner) drive everything from a raw
 # /etc/sudoers.d/quark-tracker   (validate with: visudo -cf)
 youragentuser ALL=(root) NOPASSWD: /opt/quark-tracker/src/quark_ctl.py
 ```
-Point your agent at [`integrations/openclaw/SKILL.md`](integrations/openclaw/SKILL.md) (works as a template for any agent). Then you just send a Quark link and the agent probes it, checks TMDB, downloads, and sets up monitoring.
+Point your agent at [`integrations/openclaw/SKILL.md`](integrations/openclaw/SKILL.md) (works as a template for any agent). Then you just send a Quark link; the agent fires one background `autodl` call and replies instantly, while seasons land in the library with their own notifications. The agent turn never blocks on the download.
 
 ---
 
@@ -225,7 +228,9 @@ Point your agent at [`integrations/openclaw/SKILL.md`](integrations/openclaw/SKI
 | `deltask --name N` | remove a task |
 | `override --name N --tmdb-id ID [--query Q]` | register a TMDB mapping for renaming |
 | `transfer` | run quark-auto-save transfer now |
-| `sync` | download new + TMDB rename + notify |
+| `sync` | download new + TMDB rename + notify (shares a lock with the cron run) |
+| `autodl --link U [--name N] [--category C]` | **the whole pipeline in one background call**: probe → per-season best release → TMDB judgement → verified transfer → sync → subs → movie |
+| `subs --link U [--name N] [--category C]` | add external simplified-Chinese subs to an already-downloaded show (no video re-download) |
 
 ## How dedup & naming work
 

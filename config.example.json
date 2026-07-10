@@ -7,6 +7,18 @@
     "剧集": { "quark_root": "/追剧/剧集", "library": "/vol1/media/tv" }
   },
 
+  "_default_category": "Category autodl/subs use when --category is not passed.",
+  "default_category": "动漫",
+
+  "_movie_library": "Optional. When set, autodl also detects theatrical-movie folders (剧场版) in a share and downloads the main file + a Chinese sub into <movie_library>/<Title (year)>/. Empty = skip movies.",
+  "movie_library": "",
+
+  "_catalog_file": "Optional. An anime-taste style catalog JSON ([{name, link, tmdb_id?}, ...]) used by autodl/subs to resolve a share link to a show name and TMDB id. Empty = fall back to the share's own title + TMDB search.",
+  "catalog_file": "",
+
+  "_archive_passwords_file": "Where autodl stashes unpack-password candidates parsed from a share (decoy folder names / password txt) so sync can try them with 7z. Relative paths resolve next to config.json.",
+  "archive_passwords_file": "arc_passwords.json",
+
   "_owner": "Optional 'user:group' to chown downloaded files (needs root). Empty = leave as-is.",
   "owner": "",
 

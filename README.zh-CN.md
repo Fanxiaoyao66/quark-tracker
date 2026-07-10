@@ -48,7 +48,10 @@ quark-auto-save 擅长云端转存 + 在夸克内改名。但如果你想要 NAS
 - **TMDB 改名** —— 自带独立改名脚本 → `剧名 - S02E10 - 集名.ext`，不依赖外部 agent。
 - **多分类** —— 任意标签（动漫 / 剧集 / …）映射到夸克暂存目录 + 本地库路径。
 - **可插拔通知** —— `webhook`（Server酱 / Bark / 自定义）或 `command`（跑任意本地推送脚本），也可不推。
-- **AI agent 模式（可选）** —— 一个控制入口（`quark_ctl.py`：`probe / tmdb / addtask / sync / …`）+ 一个技能示例，让 agent 拿到一条分享链接就能：探测内容、自动选最优字幕组、查 TMDB 判断完结状态、分情况下载，连载剧自动加监控并设**截止日期 = 完结日 + N 天**。
+- **AI agent 模式（可选）** —— 一条后台 `autodl --link <url>` 跑完整条管线：识别季（全集包逐季处理）、选最优版本（覆盖完整 → 清晰度 → 大文件 → 有可用简体字幕）、查 TMDB 判断完结状态、转存（校验+重试）、下载、改名、通知——agent 秒回用户，不会因为几个 GB 的下载把回合拖到超时。手动子命令（`probe / tmdb / addtask / sync / …`）保留用于诊断。
+- **带密码压缩包** —— 伪装成 `.exe`/`.rar`/`.7z`/`.zip` 的资源：自动下载、从分享里解析解压密码（诱饵文件夹名 / 密码 txt，含变体猜测）、`7z` 解压、按集入库。
+- **外挂字幕** —— `subs --link <url>`（`autodl` 之后也会自动跑一遍）扫全分享找外挂字幕（散装或打包的都认），优先简体，按 `<视频名>.zh.ass` 命名放到对应集旁边。
+- **剧场版** —— 可选：TV 分享里的剧场版文件夹会被识别并单独下到电影库。
 - **零 Python 依赖** —— 仅标准库 + `aria2c`/`curl` + `docker`。
 
 ## 前置要求
@@ -172,7 +175,7 @@ sudo QUARK_TRACKER_CONFIG=/opt/quark-tracker/config.json python3 /opt/quark-trac
 quark-auto-save 按自己的节奏转存（默认 08/18/20 点）。让 quark-tracker 每小时跑一次，把新转存的下下来：
 ```cron
 # sudo crontab -e   （以 root 运行）
-17 * * * * QUARK_TRACKER_CONFIG=/opt/quark-tracker/config.json /usr/bin/flock -n /tmp/quark_sync.lock /usr/bin/python3 /opt/quark-tracker/src/quark_sync.py >> /opt/quark-tracker/cron.log 2>&1
+17 * * * * QUARK_TRACKER_CONFIG=/opt/quark-tracker/config.json /usr/bin/flock -n /tmp/quark-tracker.sync.lock /usr/bin/python3 /opt/quark-tracker/src/quark_sync.py >> /opt/quark-tracker/cron.log 2>&1
 ```
 
 ### 第 7 步 —— （可选）"发个链接就自动下" agent 模式
@@ -182,7 +185,7 @@ quark-auto-save 按自己的节奏转存（默认 08/18/20 点）。让 quark-tr
 # /etc/sudoers.d/quark-tracker   （用 visudo -cf 校验）
 你的agent用户 ALL=(root) NOPASSWD: /opt/quark-tracker/src/quark_ctl.py
 ```
-把 agent 指向 [`integrations/openclaw/SKILL.md`](integrations/openclaw/SKILL.md)（任意 agent 都可作模板）。之后你只要发条夸克链接，agent 就会探测、查 TMDB、下载、并设好监控。
+把 agent 指向 [`integrations/openclaw/SKILL.md`](integrations/openclaw/SKILL.md)（任意 agent 都可作模板）。之后你只要发条夸克链接，agent 发起一条后台 `autodl` 就秒回，各季下载完成会各自推送通知——agent 回合永远不会被下载卡住。
 
 ---
 
@@ -223,7 +226,9 @@ quark-auto-save 按自己的节奏转存（默认 08/18/20 点）。让 quark-tr
 | `deltask --name N` | 删除任务 |
 | `override --name N --tmdb-id ID [--query Q]` | 给改名登记 TMDB 映射 |
 | `transfer` | 立即执行转存 |
-| `sync` | 下新集 + TMDB 改名 + 通知 |
+| `sync` | 下新集 + TMDB 改名 + 通知（与 cron 共用一把锁，不会撞车）|
+| `autodl --link U [--name N] [--category C]` | **一条后台命令跑完整条管线**：probe → 逐季选最优版本 → TMDB 判断 → 转存校验 → sync → 字幕 → 剧场版 |
+| `subs --link U [--name N] [--category C]` | 给已入库的剧补简体外挂字幕（不重下视频）|
 
 ## 去重与命名怎么工作
 

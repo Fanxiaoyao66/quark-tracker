@@ -1,12 +1,12 @@
 ---
 name: quark-auto-tracker
-description: When the user sends a Quark share link (pan.quark.cn/s/...) and wants to download / track a show, use this. Auto-detects the share contents, uses TMDB to judge whether the show has finished airing, downloads to the media library in Infuse/Plex-friendly naming, adds a monitoring task with an end date for still-airing shows, and notifies. Handles brand-new shows, a new season of an existing show, or a specific episode.
+description: When the user sends a Quark share link (pan.quark.cn/s/...) and wants to download / track a show, use this. One background `autodl` call handles everything — season detection, best-release pick, TMDB finished-or-airing judgement, transfer, download, rename, notify — and the agent replies instantly instead of blocking its turn on a long download.
 ---
 
 # Quark auto-tracker (agent skill)
 
 When the user sends a Quark share link (`pan.quark.cn/s/`) and wants it downloaded / tracked,
-drive the **quark-tracker** tool. Run fully automatically and report when done.
+drive the **quark-tracker** tool.
 
 > Adjust the path below to your install location.
 
@@ -14,37 +14,66 @@ drive the **quark-tracker** tool. Run fully automatically and report when done.
 sudo /opt/quark-tracker/src/quark_ctl.py <subcommand> ...
 ```
 
-Subcommands:
-- `probe <url>` → `title_guess` + `folders[]` (each: `path/fid/video_count/episodes/ep_min/ep_max/sample`)
+## The one command you normally need
+
+```
+setsid sudo /opt/quark-tracker/src/quark_ctl.py autodl --link "<share_url>" \
+    [--name "<Show>"] [--category "<label>"] \
+    </dev/null >> /opt/quark-tracker/autodl.log 2>&1 &
+```
+
+Then **reply to the user immediately** ("started downloading X, you'll get a notification
+per season when it lands") and **end your turn**. `autodl` runs the whole pipeline in the
+background and sends its own notifications:
+
+probe → detect seasons (multi-season packs are processed season by season) → pick the best
+release per season (episode coverage → quality → size → usable simplified-Chinese subs) →
+TMDB finished/airing judgement (finished: download once and delete the task; airing: keep a
+monitoring task with enddate = finale + buffer) → verified transfer (retried) → download +
+extract archives + TMDB rename + notify → external subtitles → theatrical movie (optional).
+
+Rules:
+- **Never** run `transfer`/`sync` synchronously inside your turn for a fresh download — a
+  multi-GB download outlives an agent turn and the turn times out. That is exactly what
+  `autodl` in the background is for.
+- `--name` is optional (falls back to the catalog lookup, then the share's own title); pass
+  it when the user already told you the proper show name. If the show exists locally, use
+  the exact existing folder name so new episodes merge in.
+- `--category` picks the target library from config `categories` (defaults to
+  `default_category`).
+- Password-protected archives (.exe/.rar/.7z/.zip) are handled automatically (password
+  parsed from the share; variants tried with 7z).
+
+## Adding subtitles to an already-downloaded show
+
+When the user says a downloaded show has no (or wrong-language) subtitles:
+
+```
+setsid sudo /opt/quark-tracker/src/quark_ctl.py subs --link "<share_url>" \
+    [--name "<Show>"] </dev/null >> /opt/quark-tracker/autodl.log 2>&1 &
+```
+
+Scans the whole share (including zipped subtitle packs) for external subs, prefers
+simplified Chinese, pairs them by season/episode with the library files and names them
+`<video name>.zh.ass` so media servers pick them up. Never overwrites existing subs, never
+re-downloads video.
+
+## Manual subcommands (diagnostics / special cases)
+
+- `probe <url>` → `title_guess` + `folders[]` (each: `path/fid/kind/video_count/archive_count/episodes/ep_min/ep_max/total_size/sample`) + `passwords[]`
 - `tmdb (--query "name" | --id N) [--season S] [--year Y] [--buffer 14]` → `status/completed/finale_air_date/next_episode_to_air/suggested_enddate/episodes[]`
 - `addtask --name "Show" --url "<share>#/list/share/<fid>-x" --savepath "<quark_root>/Show/Season 0X" [--pattern "regex"] [--enddate YYYY-MM-DD]`
-- `deltask --name "Show"`
-- `override --name "<local folder name>" --tmdb-id N [--query "original title"]`
-- `transfer` → transfer the share into your Quark account now
-- `sync` → download new episodes + TMDB rename + notify
+  (a past `--enddate` is clamped to today+3 — quark-auto-save silently skips expired tasks)
+- `deltask --name "Show"` · `listtasks` · `override --name "<local folder>" --tmdb-id N`
+- `transfer` (run quark-auto-save now) · `sync` (download + rename + notify; shares a lock
+  with the cron sync so parallel runs can't corrupt each other's .part files)
 
-## Workflow
+Use these for a *specific single episode* (set `--pattern` to match just that file, then
+`transfer` + `sync` + `deltask`) or when the user asks what is being tracked.
 
-1. **Probe** the link. If a season has multiple subtitle-group subfolders, auto-pick the best
-   (prefer soft-subbed / most complete `ep_max` / mkv). Note which you chose for the report.
-2. **Identify on TMDB** with `tmdb` (reconcile the Chinese/fansub name → TMDB; use the original /
-   romaji title or `--id` if a Chinese query fails). Decide the library category (e.g. anime vs TV).
-3. **Pick the library folder name + season.** If the show already exists locally, reuse the exact
-   existing folder name so new episodes merge in (check the library dir). savepath =
-   `<category quark_root>/<Show>/Season 0X`. If TMDB can't find the Chinese name, register an
-   `override` so renaming gets episode titles.
-4. **Branch on `tmdb.completed`:**
-   - **Finished** → download all, no monitoring: `addtask` (no enddate) → `transfer` → `sync` → `deltask`.
-   - **Still airing** → download what's out + monitor with an end date:
-     `addtask --enddate <suggested_enddate>` → `transfer` → `sync` (keep the task; it auto-stops at enddate).
-   - **Specific episode** → set `--pattern` to match just that episode, then `transfer` → `sync` → `deltask`.
-5. Build the subtitle-group sub-share URL as `<share_url>#/list/share/<folder_fid>-x`.
-6. **Report:** show name, category, finished/airing, group chosen, episodes downloaded, monitoring +
-   enddate (if any). `sync` sends the configured notifications automatically.
+## Reporting
 
-## Rules
-- Downloading, renaming (`Show - SxxExx - Episode Name.ext`) and notifying are all done by `sync`;
-  it skips episodes already in the library.
-- The monitoring end date comes from `tmdb.suggested_enddate` (finale + buffer days).
-- Don't invent episode numbers; verify the title/season against TMDB.
-- These are other people's share links: only transfer into your own account, then download.
+`autodl` notifies per season by itself. If the user asks for status later, check
+`listtasks` and the tail of `autodl.log` / `quark_sync.log`.
+
+These are other people's share links: only transfer into your own account, then download.
