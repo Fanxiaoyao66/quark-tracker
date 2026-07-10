@@ -114,6 +114,11 @@ def cmd_tmdb(a):
     status = info.get("status")
     next_ep = info.get("next_episode_to_air")
     season = int(args.get("season") or (info.get("number_of_seasons") or 1))
+    # next_episode_to_air is show-level: while another season is airing it must not
+    # mark THIS season as ongoing, or long-finished seasons get a past enddate and
+    # quark-auto-save silently skips their transfer task ("out of run window")
+    if next_ep and int(next_ep.get("season_number") or 0) != season:
+        next_ep = None
     eps = tmdb_get("/tv/%s/season/%s" % (tid, season), language=lang).get("episodes", [])
     today = datetime.date.today()
 
@@ -140,6 +145,9 @@ def cmd_tmdb(a):
         else:
             base = today + datetime.timedelta(days=60)
         enddate = (base + datetime.timedelta(days=buf)).isoformat()
+        if datetime.date.fromisoformat(enddate) < today:
+            # computed enddate already in the past = this season finished long ago
+            completed, enddate = True, None
     out({"found": True, "id": tid, "name": info.get("name"), "original_name": info.get("original_name"),
          "status": status, "completed": completed, "in_production": info.get("in_production"),
          "season": season, "season_episode_count": len(eps), "aired": len(aired),
@@ -159,7 +167,14 @@ def cmd_addtask(a):
     task = {"taskname": args["name"], "shareurl": args["url"], "savepath": args["savepath"],
             "pattern": args.get("pattern", r"\.(mkv|mp4)$"), "replace": ""}
     if args.get("enddate"):
-        task["enddate"] = args["enddate"]
+        ed = args["enddate"]
+        try:
+            if datetime.date.fromisoformat(ed) < datetime.date.today():
+                # a past enddate makes quark-auto-save skip the task silently forever
+                ed = (datetime.date.today() + datetime.timedelta(days=3)).isoformat()
+        except Exception:
+            pass
+        task["enddate"] = ed
     sys.stdout.write(dexec(["addtask", json.dumps(task, ensure_ascii=False)])); restart()
 
 
