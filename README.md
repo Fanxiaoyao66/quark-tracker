@@ -37,6 +37,18 @@ local NAS library  /media/<Show>/Season NN/<Show> - SxxExx - Episode Name.ext
 
 Downloads go straight through the Quark download API (cookie + signed URL) using **aria2c multi-connection**, so they are full-speed and unaffected by any FUSE/WebDAV mount caching.
 
+
+## October 2026 update
+
+The pipeline now audits full shares, preserves explicit season requests, records
+downloaded fids, excludes sidecars from video deduplication, and creates recurring
+patterns that accept future episodes. Optional AI is configured through a command
+adapter; normal rule-based operation does not require OpenClaw.
+
+See [upgrade instructions and behavior](docs/upgrade-2026-10.md). Existing task
+patterns are not automatically migrated. Keep private state out of Git.
+
+
 ## Why
 
 quark-auto-save is great at cloud-to-cloud transfer + renaming inside Quark. But if you want **real local files** on your NAS (archive, no dependence on a share staying alive, rock-solid scraping), you need a downloader that pulls only the *new* episodes and merges them into an existing library — fast. That's quark-tracker.

@@ -18,7 +18,7 @@ sudo /opt/quark-tracker/src/quark_ctl.py <subcommand> ...
 
 ```
 setsid sudo /opt/quark-tracker/src/quark_ctl.py autodl --link "<share_url>" \
-    [--name "<Show>"] [--category "<label>"] \
+    [--name "<Show>"] [--category "<label>"] [--season N] \
     </dev/null >> /opt/quark-tracker/autodl.log 2>&1 &
 ```
 
@@ -77,3 +77,16 @@ Use these for a *specific single episode* (set `--pattern` to match just that fi
 `listtasks` and the tail of `autodl.log` / `quark_sync.log`.
 
 These are other people's share links: only transfer into your own account, then download.
+
+## Preserve season intent and existing media
+
+- When the user specifies season N, pass `--season N`; preserve that request before
+  stripping a title suffix. Never substitute another season if N cannot be verified.
+- Use `audit --link ... --name ... --season N --no-ai` for a read-only inventory.
+  Incomplete scans or ambiguous groups do not authorize guessing season 1.
+- Reuse the existing show directory; inspect owned seasons. If the requested season
+  is already downloaded and monitored, inspect the task rather than running autodl again.
+- Do not bypass guards with hand-built transfer tasks or relabel S1 files as S2.
+- Recurring tasks vary episode numbers; transfer verification checks exact audited
+  filenames. A populated destination folder alone is not proof of successful transfer.
+- Never delete existing media or clear a fid ledger to resolve a naming mismatch.

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: AGPL-3.0-or-later
 """Runs INSIDE the quark-auto-save container; reuses its Quark client + saved cookie.
 
 Copy this file into the container's config volume (mounted at /app/config) so it is
@@ -7,19 +6,14 @@ reachable at /app/config/qsync_api.py, then call via `docker exec`.
 
 Actions:
   tree <root>...        list saved roots  -> {root: {exists, shows:[{name, seasons:[{name, files}]}]}}
-  urls <fid>...         -> {"cookie": <account cookie>, "urls": {fid: download_url},
-                            "dlcookies": {fid: temp __puus cookie the Quark CDN requires}}
-  probe <share_url>     walk a SHARE link -> {pwd_id, title_guess, folders:[...], passwords:[...]}
-                        folders now include archive folders (.exe/.rar/.7z/.zip) and
-                        password candidates parsed from decoy folder names / password txt
+  urls <fid>...         -> {"cookie": <account cookie>, "urls": {fid: download_url}}
+  probe <share_url>     walk a SHARE link -> {pwd_id, title_guess, folders:[...]}
   addtask <json>        upsert a task into quark_config.json (match by taskname)
   deltask <taskname>    remove a task
   listtasks             list current tasks
-  lsfiles <path>        lightweight file count at an account path (post-transfer verify)
   subsfor <url> <fid>   simplified-Chinese subs inside ONE video folder -> [{ep,lang,ext,url,cookie}]
-  subscan <url>         external subs ANYWHERE in the share -> [{season,ep,lang,ext,url,cookie}]
-  subarch <url>         subtitle ARCHIVES inside subtitle-ish folders -> [{name,path,season,url,cookie}]
-  movieget <url> <fid>  main movie file + sub from a theatrical-movie folder -> {video, sub}
+  subscan <url>         simplified-Chinese subs ANYWHERE in the share -> [{season,ep,lang,ext,url,cookie}]
+  movieget <url> <fid>  main movie file + sub from a 剧场版 folder -> {video, sub}
 
 NOTE: quark_auto_save prints transient errors (e.g. SSL EOF) to stdout. We redirect
 stdout to stderr so ONLY the final clean JSON reaches the real stdout channel.
@@ -36,7 +30,7 @@ def emit(obj):
     _REAL_OUT.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 
-CONF = "/app/config/quark_config.json"
+CONF = os.environ.get("QUARK_CONFIG", "/app/config/quark_config.json")
 VIDEO = re.compile(r'\.(mkv|mp4|avi|mov|m4v|ts)$', re.I)
 ARCHIVE = re.compile(r'\.(exe|rar|7z|zip)$', re.I)
 PWTXT = re.compile(r'(解压密码|密码|password|pass).*\.txt$', re.I)
@@ -47,8 +41,7 @@ EP_PATTERNS = [r'[Ss]\d{1,2}[Ee](\d{1,3})', r'-\s*(\d{1,3})\s*(?:\[|\(|v\d|$|\.)
                r'\[(\d{1,3})\]', r'第\s*(\d{1,3})\s*[话集話]', r'[Ee][Pp]?\s*(\d{1,3})']
 
 
-# strip "Season N" before episode parsing, or "Season 2 [03]" is misread as ep=2
-SEASON_DECOY = re.compile(r'[Ss]eason\s*\d{1,2}', re.I)
+SEASON_DECOY = re.compile(r'[Ss]eason\s*\d{1,2}', re.I)   # 抹掉"Season N"季号诱饵,免被当成集数(如 Season 2 [03] 误判 ep=2)
 
 
 def parse_ep(name):
@@ -72,8 +65,15 @@ def parse_ep_range(name):
 
 
 def get_acc():
-    cfg = json.load(open(CONF))
+    with open(CONF, encoding='utf-8') as stream:
+        cfg = json.load(stream)
     acc = q.Quark(cfg["cookie"][0], 0)
+    # Bound this helper's API calls without editing the upstream container image.
+    request = acc._send_request
+    def bounded_request(*args, **kwargs):
+        kwargs.setdefault('timeout', (8, 30))
+        return request(*args, **kwargs)
+    acc._send_request = bounded_request
     acc.init()
     return acc, cfg["cookie"][0]
 
@@ -99,8 +99,15 @@ def ls(acc, fid):
 
 
 def fid_of(acc, path):
-    r = retry(lambda: acc.get_fids([path]))
-    return r[0]["fid"] if r else None
+    def _():
+        r = acc.get_fids([path])
+        if not r:                    # 抖动时 get_fids 静默返回空(不抛异常), retry 兜不到 -> 显式抛出触发重试
+            raise RuntimeError("get_fids empty: %s" % path)
+        return r
+    try:
+        return retry(_, tries=3, delay=1)[0]["fid"]
+    except Exception:
+        return None                  # 连着 3 次都空 -> 认为该路径确实不存在
 
 
 def share_detail(acc, pwd_id, stoken, fid):
@@ -152,7 +159,15 @@ def main():
         for root in sys.argv[2:]:
             rfid = fid_of(acc, root)
             if not rfid:
-                out[root] = {"exists": False, "shows": []}; continue
+                miss = False                     # 父目录列得出来且里面没有它 -> 确实不存在,不是抖动
+                try:
+                    parent, _, leaf = root.rpartition("/")
+                    pfid = fid_of(acc, parent) if parent else None
+                    if pfid:
+                        miss = leaf not in {x["file_name"] for x in ls(acc, pfid) if x.get("dir")}
+                except Exception:
+                    miss = False
+                out[root] = {"exists": False, "missing": miss, "shows": []}; continue
             shows = []
             for show in ls(acc, rfid):
                 if not show.get("dir"):
@@ -183,17 +198,21 @@ def main():
         if st.get("status") != 200:
             emit({"error": "stoken", "message": st.get("message")}); return
         stoken = st["data"]["stoken"]
-        folders = []; pw_names = []; pw_txts = []
+        folders = []; pw_names = []; pw_txts = []; scan_errors = []; visited = set()
 
         def walk(fid, path, depth):
-            if depth > 4:
-                return
-            items = share_detail(acc, pwd_id, stoken, fid)
+            if depth > 32 or len(visited) >= 10000:
+                scan_errors.append({"path": path, "error": "scan_limit"}); return
+            if fid in visited: return
+            visited.add(fid)
+            try: items = share_detail(acc, pwd_id, stoken, fid)
+            except Exception as exc:
+                scan_errors.append({"path": path, "error": str(exc)[:160]}); return
             vids = [it for it in items if not it.get("dir") and VIDEO.search(it["file_name"])]
             arcs = [it for it in items if not it.get("dir") and ARCHIVE.search(it["file_name"])]
             pws = [it for it in items if not it.get("dir") and PWTXT.search(it["file_name"])]
             subs = [it for it in items if it.get("dir")]
-            for it in subs:                       # passwords often hide in decoy folder names
+            for it in subs:                                    # 密码常藏在诱饵空文件夹名里：解压密码：xxx
                 m = PW_NAME.search(it["file_name"])
                 if m:
                     pw_names.append(m.group(1))
@@ -213,7 +232,9 @@ def main():
                                 "video_count": len(vids), "archive_count": len(arcs),
                                 "has_password": bool(pws),
                                 "total_size": sum(it.get("size", 0) for it in (vids + arcs)),
-                                "archives": [a["file_name"] for a in arcs][:40],
+                                "archives": [a["file_name"] for a in arcs],
+                                "files": [{"fid": v["fid"], "name": v["file_name"], "size": v.get("size", 0),
+                                           "kind": "video" if VIDEO.search(v["file_name"]) else "archive"} for v in vids + arcs],
                                 "episodes": eps, "ep_min": (eps[0] if eps else None),
                                 "ep_max": (eps[-1] if eps else None),
                                 "sample": (vids[0]["file_name"] if vids else arcs[0]["file_name"])})
@@ -225,16 +246,16 @@ def main():
         title_guess = top_dirs[0]["file_name"] if (
             len(top_dirs) == 1 and not any(VIDEO.search(it["file_name"]) for it in top if not it.get("dir"))) else None
         walk(pdir_fid, "", 0)
-        passwords = []                # folder-name candidates first (no download needed)
+        passwords = []                                         # 文件夹名候选优先(免下载)，否则读密码txt
         for p in pw_names:
             if p not in passwords:
                 passwords.append(p)
-        if not passwords and pw_txts:
+        if not passwords and pw_txts and "--readonly" not in sys.argv:
             txt = _read_share_txt(acc, cookie, pwd_id, stoken, pw_txts[0][0], pw_txts[0][1])
             for m in PW_NAME.finditer(txt or ""):
                 if m.group(1) not in passwords:
                     passwords.append(m.group(1))
-        emit({"pwd_id": pwd_id, "title_guess": title_guess, "folders": folders, "passwords": passwords})
+        emit({"pwd_id": pwd_id, "title_guess": title_guess, "folders": folders, "passwords": passwords, "scan_complete": not scan_errors, "scan_errors": scan_errors})
     elif action == "addtask":
         task = json.loads(sys.argv[2]); cfg = json.load(open(CONF))
         tl = cfg.setdefault("tasklist", [])
@@ -257,19 +278,22 @@ def main():
                "pattern": t.get("pattern"), "enddate": t.get("enddate", ""),
                "shareurl": t.get("shareurl", "")} for t in cfg.get("tasklist", [])])
     elif action == "lsfiles":
-        # lightweight: count non-dir files at an account path (post-transfer verify; faster than tree)
+        # 返回账号某路径下的文件清单；调用方必须确认选中版本的具体文件
+        # 已经转入，不能因目录里残留旧文件就误报转存成功。
         acc, _ = get_acc()
         fid = fid_of(acc, sys.argv[2])
         if not fid:
-            emit({"count": 0})
+            emit({"count": 0, "files": []})
         else:
             try:
-                emit({"count": len([x for x in ls(acc, fid) if not x.get("dir")])})
+                files = [x for x in ls(acc, fid) if not x.get("dir")]
+                emit({"count": len(files), "files": [
+                    {"fid": x.get("fid"), "name": x.get("file_name"), "size": x.get("size", 0)}
+                    for x in files]})
             except Exception as e:
-                emit({"count": 0, "error": str(e)[:80]})
+                emit({"count": 0, "files": [], "error": str(e)[:80]})
     elif action == "subsfor":
-        # subsfor <share_url> <video_folder_fid>: external subs in that folder (and subdirs)
-        # -> save to /__sub -> [{ep,lang,ext,url,cookie}], simplified Chinese preferred per episode
+        # subsfor <share_url> <video_folder_fid>: 该文件夹(及子目录)里的简体外挂字幕→save到/__sub→返回[{ep,lang,ext,url,cookie}]
         acc, cookie = get_acc(); surl = sys.argv[2]; folder = sys.argv[3]
         pwd_id, passcode, _, _ = acc.extract_url(surl)
         st = retry(lambda: acc.get_stoken(pwd_id, passcode))
@@ -320,9 +344,8 @@ def main():
                 pass
         emit({"subs": out})
     elif action == "subscan":
-        # subscan <share_url>: external subs anywhere in the share, deduped by (season, ep),
-        # simplified Chinese preferred. Unlike subsfor (one folder), this walks the WHOLE share —
-        # subtitle packs often live in their own top-level folder.
+        # subscan <share_url>: 扫整个分享(任意层级)的所有外挂字幕→按(季,集)去重选简体→save到/__sub→返回[{season,ep,lang,ext,url,cookie}]
+        # 与 subsfor 区别：subsfor 只扫单个视频文件夹;subscan 扫全分享(给"补字幕"用,字幕常单独放顶层文件夹)
         acc, cookie = get_acc(); surl = sys.argv[2]
         pwd_id, passcode, pdir_fid, _ = acc.extract_url(surl)
         st = retry(lambda: acc.get_stoken(pwd_id, passcode))
@@ -331,7 +354,7 @@ def main():
         stoken = st["data"]["stoken"]
         SUB = re.compile(r'\.(ass|srt|ssa|sub|vtt)$', re.I)
         SEASON_AR = re.compile(r'\bS(\d{1,2})\b|[Ss]eason\s*(\d{1,2})|第\s*(\d{1,2})\s*[季期]')
-        SEASON_CN = re.compile(r'第\s*([一二三四五六七八九十]+)\s*[季期]')   # CJK-numeral season markers
+        SEASON_CN = re.compile(r'第\s*([一二三四五六七八九十]+)\s*[季期]')   # 中文数字季号:第一季/第二季
         CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
         found = []
         def gather(fid, path, depth):
@@ -374,13 +397,13 @@ def main():
         if not bykey:
             emit({"subs": []}); return
         acc.mkdir("/__sub"); tf = fid_of(acc, "/__sub")
-        try:                          # clear leftovers so stale same-name files don't interfere
+        try:                                        # 清掉上次残留,避免同名旧文件干扰
             old = [x["fid"] for x in ls(acc, tf) if not x.get("dir")]
             if old: acc.delete(old)
         except Exception:
             pass
         _allv = list(bykey.values())
-        for _ci in range(0, len(_allv), 10):   # save in batches of 10: one big save_file partially fails on large packs
+        for _ci in range(0, len(_allv), 10):       # 分批转存(每批10):大合集分享一次性 save_file 易部分失败丢字幕(KonoSuba S2 只回1条的根因)
             _ch = _allv[_ci:_ci + 10]
             try:
                 retry(lambda c=_ch: acc.save_file([v[0] for v in c], [v[1] for v in c], tf, pwd_id, stoken))
@@ -395,16 +418,15 @@ def main():
             if not s:
                 continue
             try:
-                r, tck = retry(lambda sf=s["fid"]: acc.download([sf]))   # per-file retry: SSL EOF flakes must not drop subs
+                r, tck = retry(lambda sf=s["fid"]: acc.download([sf]))   # 逐条下载重试,SSL EOF 抖动不丢字幕
                 out.append({"season": season, "ep": ep, "lang": l, "ext": nm.rsplit(".", 1)[-1].lower(),
                             "url": r["data"][0]["download_url"], "cookie": cookie + ("; " + tck if tck else "")})
             except Exception:
                 pass
         emit({"subs": out})
     elif action == "subarch":
-        # subarch <share_url>: subtitle ARCHIVES inside subtitle-ish folders (外挂字幕/字幕/Subs)
-        # -> save to /__suba -> [{name,path,season,url,cookie}]. Complements subscan: sub packs
-        # are often zipped, and subscan only sees loose .ass files.
+        # subarch <share_url>: 找"字幕语义文件夹"(外挂字幕/字幕/Subs)里的字幕压缩档→save到/__suba→返回[{name,path,season,url,cookie}]
+        # 补 subscan 盲区:外挂字幕常被打包成 .zip/.rar/.7z 放在字幕文件夹里,subscan(只认散装.ass)抓不到
         acc, cookie = get_acc(); surl = sys.argv[2]
         pwd_id, passcode, pdir_fid, _ = acc.extract_url(surl)
         st = retry(lambda: acc.get_stoken(pwd_id, passcode))
@@ -457,8 +479,7 @@ def main():
                 pass
         emit({"archives": out})
     elif action == "movieget":
-        # movieget <share_url> <movie_folder_fid>: biggest non-extra video (the actual movie)
-        # + best subtitle from a theatrical-movie folder -> signed URLs
+        # movieget <share_url> <movie_folder_fid>: 剧场版文件夹的主影片(最大,非SP/Menu/CM/NC)+简体字幕→save→直链
         acc, cookie = get_acc(); surl = sys.argv[2]; folder = sys.argv[3]
         pwd_id, passcode, _, _ = acc.extract_url(surl)
         st = retry(lambda: acc.get_stoken(pwd_id, passcode))
@@ -483,7 +504,8 @@ def main():
         if not vids:
             emit({}); return
         mv = max(vids, key=lambda it: it.get("size", 0))
-        def sclang(nm):     # prefer simplified-Chinese subtitles
+        # 简体字幕优先
+        def sclang(nm):
             low = nm.lower()
             return (".sc." in low) or ("简" in nm) or ("chs" in low) or ("[gb]" in low) or ("_sc" in low)
         sub = next((s for s in subs if sclang(s["file_name"])), (subs[0] if subs else None))
@@ -510,4 +532,5 @@ def main():
         emit(res)
 
 
-main()
+if __name__ == "__main__":
+    main()

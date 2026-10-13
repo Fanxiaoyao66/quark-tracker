@@ -1,33 +1,39 @@
 {
   "container": "quark-auto-save",
-
   "_categories": "Map any label -> where quark-auto-save saves inside your Quark account (quark_root) and where to download locally (library). Add as many as you like.",
   "categories": {
-    "动漫": { "quark_root": "/追剧/动漫", "library": "/vol1/media/anime" },
-    "剧集": { "quark_root": "/追剧/剧集", "library": "/vol1/media/tv" }
+    "动漫": {
+      "quark_root": "/追剧/动漫",
+      "library": "/vol1/media/anime"
+    },
+    "剧集": {
+      "quark_root": "/追剧/剧集",
+      "library": "/vol1/media/tv"
+    }
   },
-
   "_default_category": "Category autodl/subs use when --category is not passed.",
   "default_category": "动漫",
-
   "_movie_library": "Optional. When set, autodl also detects theatrical-movie folders (剧场版) in a share and downloads the main file + a Chinese sub into <movie_library>/<Title (year)>/. Empty = skip movies.",
   "movie_library": "",
-
   "_catalog_file": "Optional. An anime-taste style catalog JSON ([{name, link, tmdb_id?}, ...]) used by autodl/subs to resolve a share link to a show name and TMDB id. Empty = fall back to the share's own title + TMDB search.",
   "catalog_file": "",
-
   "_archive_passwords_file": "Where autodl stashes unpack-password candidates parsed from a share (decoy folder names / password txt) so sync can try them with 7z. Relative paths resolve next to config.json.",
   "archive_passwords_file": "arc_passwords.json",
-
   "_owner": "Optional 'user:group' to chown downloaded files (needs root). Empty = leave as-is.",
   "owner": "",
-
-  "video_exts": ["mkv", "mp4", "avi", "mov", "m4v", "ts"],
-
-  "_download": "Quark throttles single connections hard (~100 KB/s for free accounts). aria2c with N connections bypasses it (≈67 MB/s in testing). Install aria2c; falls back to curl if missing.",
-  "download": { "connections": 16 },
-
-
+  "video_exts": [
+    "mkv",
+    "mp4",
+    "avi",
+    "mov",
+    "m4v",
+    "ts"
+  ],
+  "_download": "aria2c parallel downloads with fresh-link retries. First two attempts abort a slow connection; last permits slow completion. Speeds depend on account, network and CDN.",
+  "download": {
+    "connections": 16,
+    "lowest_speed_limit": "2M"
+  },
   "tmdb": {
     "_doc": "Provide api_key OR bearer_token, OR point env_file at a file containing TMDB_API_KEY=... / TMDB_BEARER_TOKEN=...",
     "api_key": "",
@@ -36,19 +42,21 @@
     "language": "zh-CN",
     "enddate_buffer_days": 14
   },
-
   "rename": {
     "_doc": "Bundled standalone TMDB renamer -> 'Title - SxxExx - Episode Name.ext'. Set enabled=false to keep raw SxxExx names.",
     "enabled": true,
     "script": "tmdb_rename.py"
   },
-
   "_notify": "List of notification sinks. Each new-episode batch sends {msg}. Remove all for no notifications.",
   "notify": [
     {
       "type": "command",
       "_doc": "Runs a local command; {msg} is replaced by the message text. Example: your own push script.",
-      "cmd": ["/path/to/your-notify.sh", "--message", "{msg}"]
+      "cmd": [
+        "/path/to/your-notify.sh",
+        "--message",
+        "{msg}"
+      ]
     },
     {
       "type": "webhook",
@@ -58,6 +66,14 @@
       "json_field": "text"
     }
   ],
-
-  "overrides_file": "overrides.json"
+  "overrides_file": "overrides.json",
+  "state_dir": ".",
+  "_state_dir": "Runtime ledger, caches, speed history and audit reports; relative to config.json. Keep private and back up the ledger.",
+  "download_policy_file": "download_policy.json",
+  "_download_policy_file": "Optional private per-show cancellation/blocked-season policy. See download_policy.example.json.",
+  "ai": {
+    "_doc": "Optional executable argument array. Read UTF-8 {prompt_file}, return a JSON object on stdout. {session_id} is unique per request. Empty uses rules and deterministic fallbacks. No shell is used.",
+    "command": [],
+    "timeout_seconds": 120
+  }
 }

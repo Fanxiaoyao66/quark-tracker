@@ -1,0 +1,16 @@
+{
+  "shows": [
+    {
+      "name": "Example Show",
+      "aliases": [
+        "Example Alias"
+      ],
+      "tmdb_ids": [],
+      "share_ids": [],
+      "paused": false,
+      "blocked_seasons": [
+        1
+      ]
+    }
+  ]
+}

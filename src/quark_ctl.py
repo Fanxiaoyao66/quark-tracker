@@ -12,7 +12,8 @@ Subcommands:
   override --name N --tmdb-id ID [--query Q]    register a TMDB mapping for renaming
   transfer                          run quark-auto-save transfer now
   sync                              download new episodes + TMDB rename + notify
-  autodl --link <url> [--name N] [--category C]
+  audit --link <url> [--name N] [--season S] [--no-ai]  read-only share audit
+  autodl --link <url> [--name N] [--category C] [--season S]
                                     the whole pipeline in ONE call, designed to run in the
                                     BACKGROUND (agents: `setsid ... &` and reply instantly):
                                     probe -> detect seasons -> pick the best release per
@@ -33,16 +34,9 @@ sys.path.insert(0, str(HERE))
 import notify  # noqa: E402
 
 
-def load_config():
-    p = os.environ.get("QUARK_TRACKER_CONFIG")
-    cands = [p] if p else []
-    cands += [str(HERE.parent / "config.json"), str(HERE / "config.json"), "/opt/quark-tracker/config.json"]
-    for c in cands:
-        if c and os.path.exists(c):
-            cfg = json.load(open(c, encoding="utf-8"))
-            cfg["__dir__"] = os.path.dirname(os.path.abspath(c))
-            return cfg
-    raise SystemExit("config.json not found (set QUARK_TRACKER_CONFIG)")
+from runtime import load_config, config_path, state_path, ask_json
+from link_audit import SPECIAL as SPECIAL_CONTENT_RE
+from download_guard import requested_season, canonical_name, owned_seasons, ensure_allowed, validate_task
 
 
 CFG = load_config()
@@ -82,7 +76,7 @@ def dexec(args):
     r = subprocess.run(["docker", "exec", CONTAINER, "python3", API_IN] + args,
                        capture_output=True, text=True)
     if r.returncode != 0:
-        raise SystemExit("container api error: " + (r.stderr or "")[-600:])
+        raise RuntimeError("container api error: " + (r.stderr or "")[-600:])
     return r.stdout
 
 
@@ -213,6 +207,12 @@ def cmd_addtask(a):
     args = parse_flags(a)
     task = {"taskname": args["name"], "shareurl": args["url"], "savepath": args["savepath"],
             "pattern": args.get("pattern", r"\.(mkv|mp4)$"), "replace": ""}
+    sn = requested_season(args['savepath'])
+    named = requested_season(args['name'])
+    if sn is None or (named is not None and sn != named):
+        raise ValueError('Task name and destination must identify the same season')
+    ensure_allowed(args['name'], sn, args['url'])
+    validate_task(json.loads(dexec(['probe', args['url'], '--readonly'])), sn, task['pattern'])
     if args.get("enddate"):
         ed = args["enddate"]
         try:
@@ -278,22 +278,25 @@ def _sub_ok(b):
     return 1
 
 
+def _is_special_folder(folder):
+    return bool(SPECIAL_CONTENT_RE.search(_fblob(folder)))
+
 def _select_folder(folders):
-    vids = [f for f in folders if f.get("kind") == "video"]
-    arcs = [f for f in folders if f.get("kind") == "archive"]
+    # SPs/OVA/Mini Anime may contain more numbered files than the TV season.  They
+    # must never win the "most episodes" score or be transferred as normal episodes.
+    normal = [f for f in folders if not _is_special_folder(f)]
+    vids = [f for f in normal if f.get("kind") == "video"]
+    arcs = [f for f in normal if f.get("kind") == "archive"]
     if vids:
-        # release priority: episode coverage (baseline — never pick a half pack) ->
-        # picture quality -> larger files -> subtitle usability -> starts at ep 1.
-        # Drop hardsubbed-without-simplified releases first (unless that's all there is).
+        # 用户选版优先级：覆盖完整(底线,防分卷缺集) → 清晰 → 大文件 → 字幕可用。先过滤只内嵌繁/非中文的(除非全是)
         ok = [f for f in vids if _sub_ok(_fblob(f)) > 0]
         pool = ok if ok else vids
-
         def vscore(f):
             b = _fblob(f); eps = f.get("episodes") or []
             return (len(eps), _qscore(b), f.get("total_size") or 0, _sub_ok(b), 1 if f.get("ep_min") == 1 else 0)
         return ("video", sorted(pool, key=vscore, reverse=True)[0])
     if arcs:
-        # archive releases: quality first, then size
+        # Archives: prefer quality, then size within the selected release.
         def ascore(f):
             b = _fblob(f)
             return (1 if f.get("has_password") else 0, _qscore(b), f.get("total_size") or 0, f.get("ep_max") or 0, -(f.get("archive_count") or 99))
@@ -390,7 +393,7 @@ def _cn2num(s):
 
 # multi-season packs must land in the BASE show folder (seasons go to Season NN
 # subdirs); strip trailing season suffixes like 第三季 / Season 3 / S4 from the name
-_SEASON_SUFFIX = re.compile(r'\s*(?:第\s*[0-9一二三四五六七八九十百零两]+\s*[季期部]|Season\s*\d{1,2}|\bS\d{1,2})\s*$', re.I)
+_SEASON_SUFFIX = re.compile(r'\s*(?:第\s*[0-9一二三四五六七八九十百零两]+\s*[季期部]|Season\s*\d{1,2}|S\d{1,2})\s*$', re.I)
 
 
 def _strip_season(name):
@@ -441,9 +444,9 @@ def _season_of(folder):
 
 def _acct_season_files(savepath):
     try:
-        return json.loads(dexec(["lsfiles", savepath])).get("count", 0)
+        return json.loads(dexec(["lsfiles", savepath]))
     except Exception:
-        return 0
+        return {"count": 0, "files": [], "error": "lsfiles failed"}
 
 
 def _write_pw(name, passwords):
@@ -465,61 +468,69 @@ def _write_pw(name, passwords):
         pass
 
 
-def _dl_season(cat, name, link, folders, passwords, snum, multi):
-    # one season: pick the best release -> addtask -> transfer (verified, retried against
-    # a race where a season is skipped) -> sync (download/extract/rename/notify)
+def _dl_season(cat, name, link, folders, passwords, snum, multi, task_suffix=""):
+    ensure_allowed(name, snum, link)
+    # 处理一季：选最优文件夹 → addtask → 转存(校验该季已转入,重试防竞态漏季) → sync(下载/解压/TMDB改名/推送一条)
     kind, folder = _select_folder(folders)
     if not folder:
-        push("❌ %s · Season %02d: nothing downloadable found." % (name, snum)); return
-    savepath = "%s/%s/Season %02d" % (cat["quark_root"].rstrip("/"), name, snum)
+        push("❌ %s · Season %02d 没找到可下载内容。" % (name, snum)); return
+    savepath = cat["quark_root"].rstrip("/") + "/%s/Season %02d" % (name, snum)
     url = "%s#/list/share/%s-x" % (link, folder["fid"])
     pattern = r"\.(mkv|mp4|avi|mov|m4v|ts|exe|rar|7z|zip)$|(解压密码|密码|password).*\.txt$"
+    pattern = folder.get("_audit_pattern") or pattern
+    expected_names = {f.get("name") for f in folder.get("files", []) if f.get("name")}
+    if expected_names:
+        # Future episodes must match the persistent task, while completion is
+        # still verified against the original audited names below.
+        from link_audit import tracking_pattern
+        pattern, fixed_names = tracking_pattern(folder, snum)
+        if fixed_names:
+            out({'show': name, 'season': snum, 'tracking_exact_only': fixed_names,
+                 'warning': 'Unrecognized filenames require a new audit for future episodes'})
     is_arc = (folder.get("archive_count") or 0) > 0
     pure_arc = is_arc and (folder.get("video_count") or 0) == 0
     if is_arc:
+        # Password sidecars must remain transferable when the audited media list
+        # contains only archives; the sync worker reads them without executing .exe.
+        pattern = '(?:' + pattern + r')|(?i:^(?:解压密码|密码|password|pass).*\.txt$)'
         _write_pw(name, passwords)
-    # completion + enddate: finished (or archive-only) -> delete the task when done;
-    # still airing -> enddate = finale + buffer (auto-stops); unknown -> 90-day fallback
+    # 完结判定+截止日期：完结(或里番压缩包)→下完删任务；连载→设 enddate(到完结+缓冲自动停)；查不到→兜底90天
     completed = pure_arc; enddate = None
     if not pure_arc:
         tid = (_catalog_entry(link) or {}).get("tmdb_id") or _tmdb_search_id(name)
         info = _tmdb_status(tid, snum) if tid else {"completed": None, "enddate": None}
-        if info.get("completed") is True:
-            completed = True
-        elif info.get("completed") is False:
-            enddate = info.get("enddate")
-        else:
-            enddate = (datetime.date.today() + datetime.timedelta(days=90)).isoformat()
-    tn = name + ((" S%d" % snum) if multi else "")
+        if info.get("completed") is True: completed = True
+        elif info.get("completed") is False: enddate = info.get("enddate")
+        else: enddate = (datetime.date.today() + datetime.timedelta(days=90)).isoformat()
+    tn = name + ((" S%d" % snum) if multi else "") + task_suffix
     task = {"taskname": tn, "shareurl": url, "savepath": savepath, "pattern": pattern, "replace": ""}
-    if enddate and not completed:
-        task["enddate"] = enddate
+    if enddate and not completed: task["enddate"] = enddate
     try:
         dexec(["addtask", json.dumps(task, ensure_ascii=False)])
     except Exception as e:
-        push("❌ %s · Season %02d: creating the task failed: %s" % (name, snum, str(e)[:70])); return
-    ok = False   # after transfer, verify the season actually has files in the account; retry if not
-    for _ in range(10):
+        push("❌ %s · Season %02d 建任务失败：%s" % (name, snum, str(e)[:70])); return
+    ok = False                                   # 校验选中版本的具体文件已转入，不能只看旧目录非空
+    for _ in range(10):                          # 转存重试 10 次,每次间隔 20s,成功即停
+        ensure_allowed(name, snum, link)
         subprocess.run(["docker", "exec", CONTAINER, "python3", QUARK_MAIN, QUARK_CONF], capture_output=True, text=True)
-        if _acct_season_files(savepath) > 0:
-            ok = True; break
+        account = _acct_season_files(savepath)
+        account_names = {f.get("name") for f in account.get("files", []) if f.get("name")}
+        if expected_names and expected_names <= account_names: ok = True; break
+        if not expected_names and account.get("count", 0) > 0: ok = True; break
         time.sleep(20)
     if not ok:
-        push("❌ %s · Season %02d: transfer into the Quark account failed after 10 tries; the scheduled task will keep retrying." % (name, snum)); return
-    push("✅ %s · Season %02d transferred, downloading to the library…" % (name, snum))
-    run_sync()
-    if completed:   # finished shows (and archive packs): download once, don't keep monitoring
-        try:
-            dexec(["deltask", tn])
-        except Exception:
-            pass
-    if not pure_arc:
+        push("❌ %s · Season %02d 转存网盘失败(重试10次仍未成功)，已交给整点 cron 后续重试。" % (name, snum)); return
+    push("✅ %s · Season %02d 已转存到网盘，开始下载入库…" % (name, snum))   # 转存成功通知
+    ensure_allowed(name, snum, link)
+    run_sync()   # flock 与整点 cron 共锁防撞车
+    if completed:                               # 完结(含里番压缩包)→下完即删任务,不长期挂着
+        try: dexec(["deltask", tn])
+        except Exception: pass
+    if not pure_arc:                            # 外挂字幕(简体)→配对入库
         try:
             ns = _fetch_subs(cat, name, link, folder["fid"], snum)
-            if ns:
-                push("📝 %s · Season %02d: matched %d external simplified-Chinese subtitle(s)" % (name, snum, ns))
-        except Exception:
-            pass
+            if ns: push("📝 %s · Season %02d 外挂简体字幕已配 %d 条" % (name, snum, ns))
+        except Exception: pass
 
 
 def _fetch_subs(cat, name, link, folder_fid, snum):
@@ -835,12 +846,12 @@ def _link_items(a, need_name_guess):
         name = _name_by_link(link)
     if not name and need_name_guess:
         try:
-            name = json.loads(dexec(["probe", link.split("#")[0]])).get("title_guess")
+            name = json.loads(dexec(["probe", link.split("#")[0], "--readonly"])).get("title_guess")
         except Exception:
             name = None
     if not name:
         push("⚠️ could not derive a show name from the link; pass --name."); return None, None
-    return cat, {"name": _strip_season(name), "link": link.split("#")[0]}
+    return cat, {"name": _strip_season(name), "requested_name": name, "link": link.split("#")[0]}
 
 
 def cmd_subs(a):
@@ -863,42 +874,115 @@ def cmd_subs(a):
         push("ℹ️ %s: found %d subtitle(s) but %d didn't match any library episode — different numbering or a different release." % (name, res.get("found", 0), res.get("missing", 0)))
 
 
+def _audit_tmdb_get(path, **params):
+    # A failed metadata lookup must not stall the download planner for minutes.
+    key, bearer = tmdb_creds()
+    if key: params['api_key'] = key
+    req = urllib.request.Request('https://api.themoviedb.org/3' + path + '?' + urllib.parse.urlencode(params),
+        headers={'Accept': 'application/json', **({'Authorization': 'Bearer ' + bearer} if bearer else {})})
+    with urllib.request.urlopen(req, timeout=12) as r: return json.loads(r.read().decode('utf-8'))
+
+def _audit_tmdb(name, link):
+    entry = _catalog_entry(link) or {}
+    tid = entry.get("tmdb_id")
+    if not tid:
+        try:
+            overrides = json.load(open(config_path(CFG, "overrides_file", "overrides.json"), encoding="utf-8"))
+            tid = (overrides.get(name) or {}).get("tmdb_id")
+        except Exception: pass
+    try:
+        if not tid:
+            hits = _audit_tmdb_get("/search/tv", query=name, language="zh-CN").get("results", [])
+            exact = [h for h in hits if name in (h.get("name"), h.get("original_name"))]
+            if len(exact) != 1: return {"error": "TMDB identity ambiguous", "seasons": []}
+            tid = exact[0]["id"]
+        info = _audit_tmdb_get("/tv/%s" % tid, language="zh-CN")
+        from concurrent.futures import ThreadPoolExecutor
+        def read_season(season):
+            sn = season.get("season_number", 0)
+            sd = dict(season)
+            try:
+                sd["episodes"] = [{"episode_number": e["episode_number"], "air_date": e.get("air_date")}
+                    for e in _audit_tmdb_get("/tv/%s/season/%s" % (tid, sn), language="zh-CN").get("episodes", [])]
+            except Exception: sd["episodes"] = []
+            return sd
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            seasons = list(pool.map(read_season, [s for s in info.get('seasons', []) if s.get('season_number', 0) > 0]))
+        return {"id": tid, "name": info.get("name"), "status": info.get("status"), "seasons": seasons}
+    except Exception as exc: return {"error": str(exc)[:160], "seasons": []}
+
+def _audit_link(name, link, probe, use_ai=True, season=None):
+    from link_audit import audit
+    return audit(probe, name, _audit_tmdb(name, link), _audit_ask if use_ai and CFG.get("ai", {}).get("command") else None, requested_season=season)
+
+def _save_link_audit(link, report):
+    import hashlib
+    directory = state_path(CFG, "link_audits")
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, hashlib.sha256(link.encode()).hexdigest()[:20] + ".json")
+    public = {k: v for k, v in report.items() if not k.startswith("_")}
+    public["checked_at"] = datetime.datetime.now().isoformat()
+    public["assignments"] = [{k: v for k, v in u.items() if k != "folder"} for u in report["_units"]]
+    with open(path + ".tmp", "w", encoding="utf-8") as f: json.dump(public, f, ensure_ascii=False, indent=2)
+    os.replace(path + ".tmp", path)
+
+def cmd_audit(a):
+    args = parse_flags(a); link = args.get("link") or (a[0] if a and not a[0].startswith("--") else None)
+    if not link: raise SystemExit("audit --link URL [--name NAME] [--no-ai]")
+    probe = json.loads(dexec(["probe", link, "--readonly"]))
+    if probe.get("error"): out(probe); return
+    name = _strip_season(args.get("name") or _name_by_link(link) or probe.get("title_guess") or "")
+    report = _audit_link(name, link, probe, not args.get("no-ai"), requested_season(args.get("name") or _name_by_link(link) or "", args.get("season")))
+    out({k: v for k, v in report.items() if not k.startswith("_")})
+
+def _audit_ask(prompt):
+    return ask_json(CFG, prompt)
+
+
 def cmd_autodl(a):
-    # the whole pipeline in one call; meant to be run in the background (agents: setsid + &)
     cat, it = _link_items(a, need_name_guess=True)
     if not it:
         return
-    name, link = it["name"], it["link"]
+    args = parse_flags(a)
+    link = it['link']
+    season = requested_season(it['requested_name'], args.get('season'))
+    if season is None:
+        season = requested_season((_catalog_entry(link) or {}).get('name', ''))
+    library = cat['library']
+    name = canonical_name(it['name'], link, library)
+    ensure_allowed(name, season, link)
+    owned = owned_seasons(library, name)
+    out({'show': name, 'requested_season': season, 'owned_seasons': owned})
+    probe = json.loads(dexec(['probe', link, '--readonly']))
+    if probe.get('error'):
+        raise ValueError('Share probe failed: ' + str(probe.get('message', 'unknown')))
+    from link_audit import select_plan, summary
+    report = _audit_link(name, link, probe, season=season)
+    _save_link_audit(link, report)
+    push(summary(report))
+    if not report['scan_complete']:
+        return
+    plan = select_plan(report, _select_folder, requested_season=season)
     try:
-        probe = json.loads(dexec(["probe", link]))
-    except Exception as e:
-        push("❌ %s: probing the share failed: %s" % (name, str(e)[:80])); return
-    if probe.get("error"):
-        push("❌ %s: the share won't open (%s) — the link may be dead." % (name, probe.get("message"))); return
-    folders = probe.get("folders", [])
-    passwords = probe.get("passwords") or []
-    # season detection: >=2 distinct seasons -> per-season processing
-    # (each season gets its own verified transfer + sync + notification)
-    by_season = {}
-    for f in folders:
-        sn = _season_of(f)
-        if sn:
-            by_season.setdefault(sn, []).append(f)
-    if len(by_season) >= 2:
-        for sn in sorted(by_season):
-            _dl_season(cat, name, link, by_season[sn], passwords, sn, True)
-    else:
-        _dl_season(cat, name, link, folders, passwords, 1, False)
-    try:    # theatrical movie -> movie library (only when movie_library is configured)
-        if _fetch_movie(name, link, folders):
-            push("🎬 %s: theatrical movie downloaded into the movie library" % name)
-    except Exception:
-        pass
-    try:    # subtitle sweep over the whole share as a safety net (idempotent, silent)
-        _place_subs_from_scan(cat, name, link)
-    except Exception:
-        pass
-    restart()
+        for sn, folder, suffix in plan:
+            if season is None and sn in owned:
+                out({'show': name, 'skipped_owned_season': sn})
+                continue
+            ensure_allowed(name, sn, link)
+            _dl_season(cat, name, link, [folder], probe.get('passwords') or [], sn, True, suffix)
+        if season is None:
+            try:
+                if _fetch_movie(name, link, probe.get('folders', [])):
+                    push('Movie downloaded into the movie library: ' + name)
+            except Exception:
+                pass
+            try:
+                _place_subs_from_scan(cat, name, link)
+            except Exception:
+                pass
+    finally:
+        restart()
+
 
 
 def main():
@@ -921,6 +1005,8 @@ def main():
         subprocess.run(["docker", "exec", CONTAINER, "python3", QUARK_MAIN, QUARK_CONF])
     elif cmd == "sync":
         run_sync()
+    elif cmd == "audit":
+        cmd_audit(a)
     elif cmd == "autodl":
         cmd_autodl(a)
     elif cmd == "subs":
@@ -929,4 +1015,5 @@ def main():
         print("unknown cmd: " + cmd)
 
 
-main()
+if __name__ == "__main__":
+    main()

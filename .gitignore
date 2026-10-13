@@ -17,3 +17,13 @@ __pycache__/
 Thumbs.db
 .idea/
 .vscode/
+
+# Private runtime state
+download_policy.json
+download_ledger.json
+ai_dedup_cache.json
+season_verify_cache.json
+speed_stats.json
+arc_passwords.json
+link_audits/
+*.bak.*
